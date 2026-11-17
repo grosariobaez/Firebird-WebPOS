@@ -1,0 +1,48 @@
+{
+  "idCompania": 1,
+  "idFactura": 12345,
+  "header": {
+    "docType": "F",
+    "ncf": "E320000000001",
+    "fecha": "2026-11-17T09:10:00",
+    "ncfVencimiento": null,
+    "nombre": "Consumidor Final",
+    "ruc": null,
+    "direccion": null,
+    "customerType": "07",
+    "taxMode": 0,
+    "operMode": "01",
+    "currency": "DOP",
+    "currencyRate": 1,
+    "paymentType": 1,
+    "tip": 0,
+    "total": 118.00,
+    "itbis": 18.00,
+    "devuelto": 0
+  },
+  "details": [
+    {
+      "secuencia": 1,
+      "idProducto": 555,
+      "referencia": "ABC-123",
+      "descripcion": "Producto de ejemplo",
+      "cantidad": 1,
+      "precio": 100.00,
+      "descuento": 0,
+      "itbis": 18.00,
+      "cantidadDevuelta": 0,
+      "tax": 1,
+      "itemClass": 0,
+      "um": "UND"
+    }
+  ],
+  "payments": [
+    {
+      "secuencia": 1,
+      "tipo": "XXX",
+      "monto": 118.00,
+      "estatus": "EMI",
+      "descripcion": "Efectivo"
+    }
+  ]
+}

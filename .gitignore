@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+.vs/
+**/appsettings.Local.json
+**/*.payload
+**/*.tmp
+**/.instance.lock
