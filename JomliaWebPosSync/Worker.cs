@@ -54,6 +54,17 @@ public sealed class Worker(IFirebirdRepository firebird, IPayloadStore store, Sy
                         stoppingToken.ThrowIfCancellationRequested();
                         await coordinator.ProcessAsync(invoice, stoppingToken);
                     }
+                    try
+                    {
+                        int reconciled = await coordinator.ProcessSourceEventsAsync(stoppingToken);
+                        if (reconciled > 0) logger.LogInformation("Source events reconciled Count={Count}", reconciled);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+                    catch (Exception e)
+                    {
+                        var failure = retry.Classify(e);
+                        logger.LogWarning("Source event reconciliation deferred ErrorType={ErrorType} Field={Field}", failure.Code, failure.Field);
+                    }
                     if (!inspected) inspected = await coordinator.InspectStoredPayloadsAsync(stoppingToken);
                     if (DateTimeOffset.UtcNow >= nextMetrics)
                     {

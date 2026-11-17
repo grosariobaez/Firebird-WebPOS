@@ -35,6 +35,8 @@ Completar servidor SQL, credenciales protegidas, charset Firebird, compañía or
 
 Las equivalencias fiscales permanecen vacías o deshabilitadas: tipo/estados documentales, precios sin ITBIS, descuentos, impuestos, clasificación de artículos, unidades, identificación real del cliente, vencimiento eNCF y FPA_TIPO. La [guía de configuración](JomliaWebPosSync/CONFIGURATION.md) define cada clave, reglas de precisión, permisos y tratamiento de errores. No se inventa el esquema de CLIENTES ni datos fiscales.
 
+V1.1 añade: bloqueo incondicional de `FAC_STATUS='ANU'` con tres clasificaciones (`SOURCE_INVOICE_CANCELLED`, `CANCELLED_AFTER_PREPARATION`, `POST_SYNC_CANCELLATION`), estrategia explícita para DFC_ITBIS (`Unconfirmed` por defecto), reglas confirmables de consistencia de pago sin convertir F6/EFE/TRA en el JSON, y eventos de origen para conciliación. La migración `docs/11_firebird_outbox_safety_v4.sql` está preparada pero **no ejecutada**; debe aplicarse antes de habilitar el servicio en un entorno autorizado. El contrato JSON, los payloads existentes y la idempotencia del SP no cambian.
+
 ## Atención antes de producción
 
 - El JSON de ejemplo contiene un eNCF de 12 caracteres; el servicio aplica los 13 exigidos por el SP.

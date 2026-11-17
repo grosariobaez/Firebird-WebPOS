@@ -38,6 +38,7 @@ public sealed class SyncCoordinator(IFirebirdRepository firebird, ISqlServerRepo
             var persisted = await store.LoadAsync(claim.Key, lease.Token);
             var snapshot = await reader.ReadAsync(claim.Key, lease.Token);
             ncf = persisted?.Ncf ?? snapshot.Header?.Ncf;
+            if (persisted is not null) validator.ValidateReplay(snapshot);
             var fingerprint = serializer.Fingerprint(snapshot);
             if (persisted is not null)
             {
@@ -64,6 +65,8 @@ public sealed class SyncCoordinator(IFirebirdRepository firebird, ISqlServerRepo
             diagnostics.Invoice("ImportAttempt", claim.Key, ncf, claim.Attempt, "R", timer.Elapsed);
             await sql.ImportAsync(persisted, lease.Token);
             diagnostics.Invoice("SqlConfirmed", claim.Key, ncf, claim.Attempt, "R", timer.Elapsed);
+            var lateEvents = await firebird.GetPendingSourceEventsAsync(claim.Key, stopping);
+            if (lateEvents.Count > 0) throw new SyncException("SOURCE_CHANGED_BEFORE_ACK", "PA_FB_EVENTOS");
             await lease.StopHeartbeatAsync();
             if (lease.Failure is not null) throw lease.Failure;
             // A trigger reset or expired/replaced claim makes this conditional ACK a no-op.
@@ -103,6 +106,22 @@ public sealed class SyncCoordinator(IFirebirdRepository firebird, ISqlServerRepo
                     updateFailure.Code, updateFailure.Field, LogLevel.Error);
             }
         }
+    }
+
+    public async Task<int> ProcessSourceEventsAsync(CancellationToken ct)
+    {
+        var events = await firebird.GetPendingSourceEventsAsync(null, ct);
+        int processed = 0;
+        foreach (var sourceEvent in events)
+        {
+            ct.ThrowIfCancellationRequested();
+            var timer = Stopwatch.StartNew();
+            string? state = await firebird.GetStateAsync(sourceEvent.Key, ct);
+            diagnostics.Invoice(sourceEvent.Code, sourceEvent.Key, null, 0, state ?? "Unknown", timer.Elapsed,
+                "None", "PA_FB_EVENTOS", state is null ? LogLevel.Warning : LogLevel.Information);
+            if (await firebird.MarkSourceEventProcessedAsync(sourceEvent, ct)) processed++;
+        }
+        return processed;
     }
 
     public async Task<bool> InspectStoredPayloadsAsync(CancellationToken ct)

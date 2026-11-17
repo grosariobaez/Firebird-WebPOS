@@ -1,5 +1,12 @@
 namespace JomliaWebPosSync.Configuration;
 
+public enum ItbisInterpretation
+{
+    Unconfirmed,
+    MonetaryAmount,
+    PercentageRate
+}
+
 public sealed class FiscalMappingsOptions
 {
     public bool PricesExcludeItbisConfirmed { get; set; }
@@ -8,6 +15,8 @@ public sealed class FiscalMappingsOptions
     public bool MonetaryLineDiscountConfirmed { get; set; }
     public bool HeaderDiscountEqualsLineSumConfirmed { get; set; }
     public bool LineItbisIsMonetaryAmountConfirmed { get; set; }
+    public ItbisInterpretation LineItbisInterpretation { get; set; } = ItbisInterpretation.Unconfirmed;
+    public Dictionary<string, decimal> ItbisRatesByTaxCode { get; set; } = new(StringComparer.Ordinal);
     public bool ItbisRoundedPerLineConfirmed { get; set; }
     public bool UseFacFechaVenceAsNcfExpiryConfirmed { get; set; }
     public string Currency { get; set; } = "";
@@ -25,6 +34,11 @@ public sealed class FiscalMappingsOptions
     public Dictionary<string, CustomerMapping> Customers { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, DateOnly> NcfExpiryDates { get; set; } = new(StringComparer.Ordinal);
     public Dictionary<string, PaymentMapping> PaymentTypes { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, PaymentConsistencyRule> PaymentConsistencyRules { get; set; } = new(StringComparer.Ordinal);
+
+    public ItbisInterpretation EffectiveLineItbisInterpretation =>
+        LineItbisInterpretation != ItbisInterpretation.Unconfirmed ? LineItbisInterpretation
+        : LineItbisIsMonetaryAmountConfirmed ? ItbisInterpretation.MonetaryAmount : ItbisInterpretation.Unconfirmed;
 }
 
 public sealed class CustomerMapping
@@ -37,4 +51,11 @@ public sealed class PaymentMapping
 {
     public string WebPosType { get; set; } = "";
     public string? Description { get; set; }
+}
+
+public sealed class PaymentConsistencyRule
+{
+    public string ExpectedComponent { get; set; } = "";
+    public string[] ZeroComponents { get; set; } = [];
+    public bool PaidIncludesCredit { get; set; }
 }

@@ -170,6 +170,45 @@ public sealed class FirebirdRepository(ConnectionFactory connections, IOptions<S
         return result is null or DBNull ? null : Convert.ToString(result, CultureInfo.InvariantCulture);
     }
 
+    public async Task<IReadOnlyList<SourceEvent>> GetPendingSourceEventsAsync(InvoiceKey? key, CancellationToken ct)
+    {
+        await using var c = connections.CreateFirebird();
+        await c.OpenAsync(ct);
+        await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
+        string filter = key.HasValue ? " AND IDFACTURA=@invoice" : "";
+        await using var cmd = Command(c, t, """
+            SELECT FIRST (@batch) IDCOMPANIA,IDFACTURA,CODIGO,FECHA_EVENTO FROM PA_FB_EVENTOS
+            WHERE PROCESADO='N' AND IDCOMPANIA=@company
+            """ + filter + """
+            ORDER BY FECHA_EVENTO,IDCOMPANIA,IDFACTURA
+            """);
+        Add(cmd, "@batch", FbDbType.Integer, sync.Value.BatchSize);
+        Add(cmd, "@company", FbDbType.Integer, webpos.Value.SourceCompanyId);
+        if (key.HasValue) Add(cmd, "@invoice", FbDbType.Integer, key.Value.IdFactura);
+        var result = new List<SourceEvent>();
+        await using (var r = await cmd.ExecuteReaderAsync(ct))
+            while (await r.ReadAsync(ct))
+                result.Add(new(new(r.GetInt32(0), r.GetInt32(1)), r.GetString(2), r.GetDateTime(3)));
+        await t.CommitAsync(ct);
+        return result;
+    }
+
+    public async Task<bool> MarkSourceEventProcessedAsync(SourceEvent sourceEvent, CancellationToken ct)
+    {
+        await using var c = connections.CreateFirebird();
+        await c.OpenAsync(ct);
+        await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
+        await using var cmd = Command(c, t, """
+            UPDATE PA_FB_EVENTOS SET PROCESADO='S',FECHA_PROCESADO=CURRENT_TIMESTAMP
+            WHERE IDCOMPANIA=@company AND IDFACTURA=@invoice AND CODIGO=@code AND PROCESADO='N'
+            """);
+        Key(cmd, sourceEvent.Key);
+        Add(cmd, "@code", FbDbType.VarChar, sourceEvent.Code, 40);
+        int affected = await cmd.ExecuteNonQueryAsync(ct);
+        await t.CommitAsync(ct);
+        return affected == 1;
+    }
+
     public async Task<QueueCounts> GetCountsAsync(CancellationToken ct)
     {
         await using var c = connections.CreateFirebird();

@@ -38,6 +38,7 @@ builder.Services.AddSingleton<IFirebirdRepository, FirebirdRepository>();
 builder.Services.AddSingleton<ISqlServerRepository, SqlServerRepository>();
 builder.Services.AddSingleton<IPayloadStore, PayloadStore>();
 builder.Services.AddSingleton<InvoiceReader>();
+builder.Services.AddSingleton<IFiscalDataProvider, ConfiguredFiscalDataProvider>();
 builder.Services.AddSingleton<InvoiceMapper>();
 builder.Services.AddSingleton<InvoiceValidator>();
 builder.Services.AddSingleton<InvoiceJsonSerializer>();

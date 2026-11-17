@@ -14,6 +14,8 @@ public interface IFirebirdRepository
     Task<InvoiceSnapshot> ReadSnapshotAsync(InvoiceKey key, CancellationToken ct);
     Task<QueueCounts> GetCountsAsync(CancellationToken ct);
     Task<string?> GetStateAsync(InvoiceKey key, CancellationToken ct);
+    Task<IReadOnlyList<SourceEvent>> GetPendingSourceEventsAsync(InvoiceKey? key, CancellationToken ct);
+    Task<bool> MarkSourceEventProcessedAsync(SourceEvent sourceEvent, CancellationToken ct);
 }
 
 public interface ISqlServerRepository

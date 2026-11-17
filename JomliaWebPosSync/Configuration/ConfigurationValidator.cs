@@ -33,6 +33,17 @@ public sealed class ConfigurationValidator(
         Require(w.SourceCompanyId is >= 0, "WebPos:SourceCompanyId required");
         Require(Text(w.CompanyLicCod, 10) && Text(w.BranchCod, 4) && Text(w.PosCod, 3), "WebPos license/branch/POS required (max 10/4/3 per V6)");
         Require(!w.AllowMonetaryLineDiscount || m.MonetaryLineDiscountConfirmed, "Discount permission requires fiscal confirmation");
+        Require(!m.AllowedHeaderStatuses.Contains("ANU", StringComparer.Ordinal), "FiscalMappings:AllowedHeaderStatuses cannot include ANU");
+        Require(!(m.LineItbisInterpretation == ItbisInterpretation.PercentageRate && m.LineItbisIsMonetaryAmountConfirmed),
+            "FiscalMappings: contradictory DFC_ITBIS interpretation");
+        string[] components = ["Efectivo", "TarjetaMonto", "Transferencia", "ChequeMonto", "Credito"];
+        foreach (var rule in m.PaymentConsistencyRules.Values)
+        {
+            Require(rule is not null && rule.ZeroComponents is not null && components.Contains(rule.ExpectedComponent, StringComparer.Ordinal)
+                && rule.ZeroComponents.All(c => components.Contains(c, StringComparer.Ordinal))
+                && !rule.ZeroComponents.Contains(rule.ExpectedComponent, StringComparer.Ordinal),
+                "FiscalMappings:PaymentConsistencyRules invalid");
+        }
         Require(!string.IsNullOrWhiteSpace(s.PayloadDirectory), "Sync:PayloadDirectory required");
         // Unknown fiscal equivalences are checked per document; they do not prevent queue diagnostics.
         return errors.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(errors);
