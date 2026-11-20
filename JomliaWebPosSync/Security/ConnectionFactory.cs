@@ -7,20 +7,19 @@ namespace JomliaWebPosSync.Security;
 
 public sealed class ConnectionFactory(IOptions<FirebirdOptions> firebird, IOptions<SqlServerOptions> sql)
 {
-    public FbConnection CreateFirebird()
-    {
-        var o = firebird.Value;
-        return new FbConnection(new FbConnectionStringBuilder
-        {
-            DataSource = o.Host, Port = o.Port, Database = o.Database, Charset = o.Charset,
-            UserID = o.User, Password = o.Password, Role = o.Role, Dialect = 3,
-            ConnectionTimeout = o.ConnectionTimeoutSeconds, Pooling = true
-        }.ConnectionString);
-    }
+    public FbConnection CreateFirebird() => CreateFirebird(firebird.Value);
 
-    public SqlConnection CreateSqlServer()
+    public SqlConnection CreateSqlServer() => CreateSqlServer(sql.Value);
+
+    public static FbConnection CreateFirebird(FirebirdOptions o) => new(new FbConnectionStringBuilder
     {
-        var o = sql.Value;
+        DataSource = o.Host, Port = o.Port, Database = o.Database, Charset = o.Charset,
+        UserID = o.User, Password = o.Password, Role = o.Role, Dialect = 3,
+        ConnectionTimeout = o.ConnectionTimeoutSeconds, Pooling = true
+    }.ConnectionString);
+
+    public static SqlConnection CreateSqlServer(SqlServerOptions o)
+    {
         var builder = new SqlConnectionStringBuilder
         {
             DataSource = o.Server, InitialCatalog = o.Database,

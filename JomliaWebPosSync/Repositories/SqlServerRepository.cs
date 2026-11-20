@@ -16,6 +16,20 @@ public sealed class SqlServerRepository(ConnectionFactory connections, IOptions<
     public ImportRoute CurrentRoute() => new(webpos.Value.SourceSystem, options.Value.Server, options.Value.Database,
         webpos.Value.CompanyLicCod, webpos.Value.BranchCod, webpos.Value.PosCod, webpos.Value.AllowMonetaryLineDiscount);
 
+    public async Task<bool> IsImportedAsync(InvoiceKey key, CancellationToken ct)
+    {
+        await using var c = connections.CreateSqlServer();
+        await c.OpenAsync(ct);
+        await using var cmd = new SqlCommand("""
+            SELECT 1 FROM dbo.PA_FB_SourceMap
+            WHERE sourceSystem=@source AND idCompania=@company AND idFactura=@invoice AND docType='F'
+            """, c) { CommandTimeout = options.Value.CommandTimeoutSeconds };
+        cmd.Parameters.Add("@source", SqlDbType.NVarChar, 40).Value = webpos.Value.SourceSystem;
+        cmd.Parameters.Add("@company", SqlDbType.Int).Value = key.IdCompania;
+        cmd.Parameters.Add("@invoice", SqlDbType.Int).Value = key.IdFactura;
+        return await cmd.ExecuteScalarAsync(ct) is not null;
+    }
+
     public async Task<string> ImportAsync(StoredPayload payload, CancellationToken ct)
     {
         if (payload.Route != CurrentRoute()) throw new SyncException("PERSISTED_ROUTE_CHANGED", "WebPos/SqlServer");

@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>JomliaWebPosSync.Configurator</AssemblyName>
+    <RootNamespace>JomliaWebPosSync.Configurator</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Company>INNOVAXD UX SRL</Company>
+    <Product>IXU — Tecnología para operaciones del mundo real</Product>
+    <Title>IXU Configurador JomliaWebPosSync</Title>
+    <Copyright>INNOVAXD UX SRL</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="JomliaWebPosSync.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\JomliaWebPosSync\JomliaWebPosSync.csproj" />
+  </ItemGroup>
+
+</Project>

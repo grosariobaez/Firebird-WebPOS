@@ -1,10 +1,8 @@
 using System.Data.Common;
-using System.Diagnostics;
 using System.Globalization;
 using FirebirdSql.Data.FirebirdClient;
 using JomliaWebPosSync.Configuration;
 using JomliaWebPosSync.Contracts;
-using JomliaWebPosSync.Diagnostics;
 using JomliaWebPosSync.Models;
 using JomliaWebPosSync.Resilience;
 using JomliaWebPosSync.Security;
@@ -13,13 +11,8 @@ using Microsoft.Extensions.Options;
 namespace JomliaWebPosSync.Repositories;
 
 public sealed class FirebirdRepository(ConnectionFactory connections, IOptions<SyncOptions> sync,
-    IOptions<FirebirdOptions> options, IOptions<WebPosOptions> webpos, SyncDiagnostics diagnostics) : IFirebirdRepository
+    IOptions<FirebirdOptions> options, IOptions<WebPosOptions> webpos) : IFirebirdRepository
 {
-    private const string Owned = """
-        IDCOMPANIA=@company AND IDFACTURA=@invoice AND ESTADO='R'
-        AND ULTIMO_ERROR=@token AND PROXIMO_INTENTO>CURRENT_TIMESTAMP
-        """;
-
     private FbCommand Command(FbConnection c, FbTransaction t, string sql) => new(sql, c, t)
     { CommandTimeout = options.Value.CommandTimeoutSeconds };
 
@@ -29,206 +22,58 @@ public sealed class FirebirdRepository(ConnectionFactory connections, IOptions<S
         if (size > 0) p.Size = size;
         p.Value = value ?? DBNull.Value;
     }
+
     private static void Key(FbCommand c, InvoiceKey key)
     {
         Add(c, "@company", FbDbType.Integer, key.IdCompania);
         Add(c, "@invoice", FbDbType.Integer, key.IdFactura);
     }
-    private static FbTransactionOptions QueueTransaction() => new()
+
+    private static FbTransactionOptions ReadTransaction() => new()
     {
         TransactionBehavior = FbTransactionBehavior.ReadCommitted | FbTransactionBehavior.RecVersion
-            | FbTransactionBehavior.Write | FbTransactionBehavior.NoWait
+            | FbTransactionBehavior.Read | FbTransactionBehavior.NoWait
     };
 
-    public async Task<IReadOnlyList<PendingInvoice>> GetPendingInvoicesAsync(CancellationToken ct)
+    private InvoiceCutover Cutover() => InvoiceCutover.From(webpos.Value, sync.Value);
+
+    public async Task<IReadOnlyList<InvoiceKey>> GetCandidateInvoicesAsync(CancellationToken ct)
     {
+        var cutover = Cutover();
         await using var c = connections.CreateFirebird();
         await c.OpenAsync(ct);
-        await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
+        await using var t = await c.BeginTransactionAsync(ReadTransaction(), ct);
         await using var cmd = Command(c, t, """
-            SELECT FIRST (@batch) IDCOMPANIA,IDFACTURA,FECHA_EVENTO,INTENTOS
-            FROM PA_FB_OUTBOX
-            WHERE IDCOMPANIA=@company AND ESTADO='P'
-              AND (PROXIMO_INTENTO IS NULL OR PROXIMO_INTENTO<=CURRENT_TIMESTAMP)
-              AND FECHA_EVENTO<=DATEADD(SECOND, -@settle, CURRENT_TIMESTAMP)
-            ORDER BY FECHA_EVENTO,IDCOMPANIA,IDFACTURA
+            SELECT FIRST (@batch) F.IDCOMPANIA,F.IDFACTURA
+            FROM FACTURAS F
+            WHERE F.IDCOMPANIA=@company AND F.IDFACTURA>=@initial AND F.FAC_FECHA>=@start
+              AND (F.FAC_STATUS IS NULL OR F.FAC_STATUS<>'ANU')
+              AND EXISTS (SELECT 1 FROM DET_FACTURA D
+                           WHERE D.IDCOMPANIA=F.IDCOMPANIA AND D.IDFACTURA=F.IDFACTURA)
+              AND EXISTS (SELECT 1 FROM FORMAS_PAGO P
+                           WHERE P.IDCOMPANIA=F.IDCOMPANIA AND P.IDFACTURA=F.IDFACTURA
+                             AND P.FPA_STATUS='EMI')
+              AND NOT EXISTS (SELECT 1 FROM FORMAS_PAGO P
+                               WHERE P.IDCOMPANIA=F.IDCOMPANIA AND P.IDFACTURA=F.IDFACTURA
+                                 AND (P.FPA_STATUS IS NULL OR P.FPA_STATUS<>'EMI'))
+            ORDER BY F.IDFACTURA
             """);
         Add(cmd, "@batch", FbDbType.Integer, sync.Value.BatchSize);
-        Add(cmd, "@company", FbDbType.Integer, webpos.Value.SourceCompanyId);
-        Add(cmd, "@settle", FbDbType.Integer, sync.Value.SettleDelaySeconds);
-        var result = new List<PendingInvoice>();
+        Add(cmd, "@company", FbDbType.Integer, cutover.Company);
+        Add(cmd, "@initial", FbDbType.Integer, cutover.InitialId);
+        Add(cmd, "@start", FbDbType.TimeStamp, cutover.Start);
+        var result = new List<InvoiceKey>();
         await using (var r = await cmd.ExecuteReaderAsync(ct))
-            while (await r.ReadAsync(ct))
-                result.Add(new(new(r.GetInt32(0), r.GetInt32(1)), r.GetDateTime(2), r.GetInt32(3)));
+            while (await r.ReadAsync(ct)) result.Add(new(r.GetInt32(0), r.GetInt32(1)));
         await t.CommitAsync(ct);
         return result;
-    }
-
-    public async Task<InvoiceClaim?> TryClaimInvoiceAsync(PendingInvoice invoice, CancellationToken ct)
-    {
-        string token = "CLAIM:" + Guid.NewGuid().ToString("N");
-        await using var c = connections.CreateFirebird();
-        await c.OpenAsync(ct);
-        await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
-        await using var cmd = Command(c, t, """
-            UPDATE PA_FB_OUTBOX SET ESTADO='R',
-              INTENTOS=CASE WHEN INTENTOS<2147483647 THEN INTENTOS+1 ELSE INTENTOS END,
-              PROXIMO_INTENTO=DATEADD(SECOND,@lease,CURRENT_TIMESTAMP), ULTIMO_ERROR=@token
-            WHERE IDCOMPANIA=@company AND IDFACTURA=@invoice AND ESTADO='P'
-              AND FECHA_EVENTO=@event AND INTENTOS=@attempts
-              AND (PROXIMO_INTENTO IS NULL OR PROXIMO_INTENTO<=CURRENT_TIMESTAMP)
-              AND FECHA_EVENTO<=DATEADD(SECOND,-@settle,CURRENT_TIMESTAMP)
-            """);
-        Key(cmd, invoice.Key);
-        Add(cmd, "@event", FbDbType.TimeStamp, invoice.EventAt);
-        Add(cmd, "@attempts", FbDbType.Integer, invoice.Attempts);
-        Add(cmd, "@lease", FbDbType.Integer, sync.Value.ClaimLeaseSeconds);
-        Add(cmd, "@settle", FbDbType.Integer, sync.Value.SettleDelaySeconds);
-        Add(cmd, "@token", FbDbType.VarChar, token, 500);
-        int affected = await cmd.ExecuteNonQueryAsync(ct);
-        await t.CommitAsync(ct);
-        return affected == 1 ? new(invoice.Key, token, invoice.EventAt,
-            invoice.Attempts == int.MaxValue ? int.MaxValue : invoice.Attempts + 1) : null;
-    }
-
-    private async Task<bool> TransitionAsync(InvoiceClaim claim, string assignment,
-        Action<FbCommand>? parameters, CancellationToken ct)
-    {
-        await using var c = connections.CreateFirebird();
-        await c.OpenAsync(ct);
-        await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
-        // assignment is only a literal supplied by the methods below, never configuration/input.
-        await using var cmd = Command(c, t, "UPDATE PA_FB_OUTBOX SET " + assignment + " WHERE " + Owned);
-        Key(cmd, claim.Key);
-        Add(cmd, "@token", FbDbType.VarChar, claim.Token, 500);
-        parameters?.Invoke(cmd);
-        int affected = await cmd.ExecuteNonQueryAsync(ct);
-        await t.CommitAsync(ct);
-        return affected == 1;
-    }
-
-    public Task<bool> RenewClaimAsync(InvoiceClaim claim, CancellationToken ct) =>
-        TransitionAsync(claim, "PROXIMO_INTENTO=DATEADD(SECOND,@lease,CURRENT_TIMESTAMP)",
-            c => Add(c, "@lease", FbDbType.Integer, sync.Value.ClaimLeaseSeconds), ct);
-    public Task<bool> MarkAsSynchronizedAsync(InvoiceClaim claim, CancellationToken ct) =>
-        TransitionAsync(claim, "ESTADO='S',FECHA_PROCESADO=CURRENT_TIMESTAMP,PROXIMO_INTENTO=NULL,ULTIMO_ERROR=NULL", null, ct);
-    public Task<bool> MarkForRetryAsync(InvoiceClaim claim, int delaySeconds, string error, CancellationToken ct) =>
-        TransitionAsync(claim, "ESTADO='P',PROXIMO_INTENTO=DATEADD(SECOND,@delay,CURRENT_TIMESTAMP),ULTIMO_ERROR=@error",
-            c => { Add(c, "@delay", FbDbType.Integer, delaySeconds); Add(c, "@error", FbDbType.VarChar, error, 500); }, ct);
-    public Task<bool> MarkAsErrorAsync(InvoiceClaim claim, string error, CancellationToken ct) =>
-        TransitionAsync(claim, "ESTADO='E',PROXIMO_INTENTO=NULL,ULTIMO_ERROR=@error",
-            c => Add(c, "@error", FbDbType.VarChar, error, 500), ct);
-
-    public async Task<int> RecoverExpiredClaimsAsync(CancellationToken ct)
-    {
-        var keys = new List<(InvoiceKey Key, int Attempt)>();
-        await using var c = connections.CreateFirebird();
-        await c.OpenAsync(ct);
-        await using (var t = await c.BeginTransactionAsync(QueueTransaction(), ct))
-        {
-            await using var cmd = Command(c, t, """
-                SELECT FIRST (@batch) IDCOMPANIA,IDFACTURA,INTENTOS FROM PA_FB_OUTBOX
-                WHERE IDCOMPANIA=@company AND ESTADO='R'
-                  AND (PROXIMO_INTENTO IS NULL OR PROXIMO_INTENTO<=CURRENT_TIMESTAMP)
-                ORDER BY PROXIMO_INTENTO,IDFACTURA
-                """);
-            Add(cmd, "@batch", FbDbType.Integer, sync.Value.BatchSize);
-            Add(cmd, "@company", FbDbType.Integer, webpos.Value.SourceCompanyId);
-            await using (var r = await cmd.ExecuteReaderAsync(ct))
-                while (await r.ReadAsync(ct)) keys.Add((new(r.GetInt32(0), r.GetInt32(1)), r.GetInt32(2)));
-            await t.CommitAsync(ct);
-        }
-        int recovered = 0;
-        foreach (var item in keys)
-        {
-            var elapsed = Stopwatch.StartNew();
-            await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
-            await using var cmd = Command(c, t, """
-                UPDATE PA_FB_OUTBOX SET ESTADO='P',PROXIMO_INTENTO=CURRENT_TIMESTAMP,
-                  ULTIMO_ERROR='CLAIM_EXPIRED'
-                WHERE IDCOMPANIA=@company AND IDFACTURA=@invoice AND ESTADO='R'
-                  AND (PROXIMO_INTENTO IS NULL OR PROXIMO_INTENTO<=CURRENT_TIMESTAMP)
-                """);
-            Key(cmd, item.Key);
-            int affected = await cmd.ExecuteNonQueryAsync(ct);
-            await t.CommitAsync(ct);
-            recovered += affected;
-            if (affected == 1) diagnostics.Invoice("ExpiredClaimRecovered", item.Key, null, item.Attempt, "P", elapsed.Elapsed, "CLAIM_EXPIRED");
-        }
-        return recovered;
-    }
-
-    public async Task<string?> GetStateAsync(InvoiceKey key, CancellationToken ct)
-    {
-        await using var c = connections.CreateFirebird();
-        await c.OpenAsync(ct);
-        await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
-        await using var cmd = Command(c, t, "SELECT ESTADO FROM PA_FB_OUTBOX WHERE IDCOMPANIA=@company AND IDFACTURA=@invoice");
-        Key(cmd, key);
-        var result = await cmd.ExecuteScalarAsync(ct);
-        await t.CommitAsync(ct);
-        return result is null or DBNull ? null : Convert.ToString(result, CultureInfo.InvariantCulture);
-    }
-
-    public async Task<IReadOnlyList<SourceEvent>> GetPendingSourceEventsAsync(InvoiceKey? key, CancellationToken ct)
-    {
-        await using var c = connections.CreateFirebird();
-        await c.OpenAsync(ct);
-        await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
-        string filter = key.HasValue ? " AND IDFACTURA=@invoice" : "";
-        await using var cmd = Command(c, t, """
-            SELECT FIRST (@batch) IDCOMPANIA,IDFACTURA,CODIGO,FECHA_EVENTO FROM PA_FB_EVENTOS
-            WHERE PROCESADO='N' AND IDCOMPANIA=@company
-            """ + filter + """
-            ORDER BY FECHA_EVENTO,IDCOMPANIA,IDFACTURA
-            """);
-        Add(cmd, "@batch", FbDbType.Integer, sync.Value.BatchSize);
-        Add(cmd, "@company", FbDbType.Integer, webpos.Value.SourceCompanyId);
-        if (key.HasValue) Add(cmd, "@invoice", FbDbType.Integer, key.Value.IdFactura);
-        var result = new List<SourceEvent>();
-        await using (var r = await cmd.ExecuteReaderAsync(ct))
-            while (await r.ReadAsync(ct))
-                result.Add(new(new(r.GetInt32(0), r.GetInt32(1)), r.GetString(2), r.GetDateTime(3)));
-        await t.CommitAsync(ct);
-        return result;
-    }
-
-    public async Task<bool> MarkSourceEventProcessedAsync(SourceEvent sourceEvent, CancellationToken ct)
-    {
-        await using var c = connections.CreateFirebird();
-        await c.OpenAsync(ct);
-        await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
-        await using var cmd = Command(c, t, """
-            UPDATE PA_FB_EVENTOS SET PROCESADO='S',FECHA_PROCESADO=CURRENT_TIMESTAMP
-            WHERE IDCOMPANIA=@company AND IDFACTURA=@invoice AND CODIGO=@code AND PROCESADO='N'
-            """);
-        Key(cmd, sourceEvent.Key);
-        Add(cmd, "@code", FbDbType.VarChar, sourceEvent.Code, 40);
-        int affected = await cmd.ExecuteNonQueryAsync(ct);
-        await t.CommitAsync(ct);
-        return affected == 1;
-    }
-
-    public async Task<QueueCounts> GetCountsAsync(CancellationToken ct)
-    {
-        await using var c = connections.CreateFirebird();
-        await c.OpenAsync(ct);
-        await using var t = await c.BeginTransactionAsync(QueueTransaction(), ct);
-        await using var cmd = Command(c, t,
-            "SELECT ESTADO,COUNT(*) FROM PA_FB_OUTBOX WHERE IDCOMPANIA=@company GROUP BY ESTADO");
-        Add(cmd, "@company", FbDbType.Integer, webpos.Value.SourceCompanyId);
-        var counts = new Dictionary<string, long>(StringComparer.Ordinal);
-        await using (var r = await cmd.ExecuteReaderAsync(ct))
-            while (await r.ReadAsync(ct)) counts[r.GetString(0)] = Convert.ToInt64(r.GetValue(1), CultureInfo.InvariantCulture);
-        await t.CommitAsync(ct);
-        return new(counts.GetValueOrDefault("P"), counts.GetValueOrDefault("R"), counts.GetValueOrDefault("S"), counts.GetValueOrDefault("E"));
     }
 
     public async Task<InvoiceSnapshot> ReadSnapshotAsync(InvoiceKey key, CancellationToken ct)
     {
         await using var c = connections.CreateFirebird();
         await c.OpenAsync(ct);
-        // Concurrency is Firebird SNAPSHOT. No fallback to READ COMMITTED or dirty reads.
+        // One SNAPSHOT transaction covers header, details and payments.
         await using var t = await c.BeginTransactionAsync(new FbTransactionOptions
         {
             TransactionBehavior = FbTransactionBehavior.Concurrency | FbTransactionBehavior.Read | FbTransactionBehavior.NoWait

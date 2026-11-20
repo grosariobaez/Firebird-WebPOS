@@ -22,11 +22,9 @@ Documento de referencia proporcionado: `WPFeDo DBConn - Especificación de campo
 ## Archivos
 
 - `Matriz_mapeo_WebPOS_V6_JOMLIA.xlsx`: 65 campos V6, origen propuesto, estatus, diccionarios, unidades de medida y 14 gates.
-- `01_firebird_outbox.sql`: cola + procedimiento + triggers Firebird, tal como V2 (requiere Firebird 2.1+). **No ejecutado en servidor real.**
 - `02_sqlserver_import_v3_QA.sql`: SP y tablas auxiliares para SQL Server; *SOLO QA*. **No probado contra SQL Server real.**
 - `03_consultas_fuente.sql`: snapshot Firebird de una factura.
 - `04_diagnostico_y_reconciliacion.sql`: diagnósticos Firebird de V2.
-- `05_RESULTADO_PRUEBA_LOCAL_PREVIO.md`: evidencia limitada de prueba local Firebird 4.0 de la versión anterior; no es prueba de la V3 SQL Server.
 - `06_preflight_sqlserver.sql`, `07_preflight_firebird.sql`: verificaciones de solo lectura originales.
 - `08_preflight_mapeo_fiscal.sql`: muestras de tipos de pago, ITBIS, conciliación de importes y metadatos CLIENTES (solo lectura).
 - `09_validacion_mapeo_destino.sql`: consultas de QA SQL Server (solo lectura); sustituir parámetros de prueba.
@@ -58,5 +56,5 @@ El INSERT de Header se hace al final y solo después de insertar pagos y detalle
 - Confirmar códigos `CompanyLicCod`/`BranchCod`/`POSCod`, vencimiento fiscal del NCF, identificación del cliente.
 - Validar `DFC_PRECIO` sin impuestos, `DFC_DESCUENTO` monetario por línea, mapeos `tax`/`itemClass`, unidades de medida y `FPA_TIPO`.
 - Pruebas con documentos anonimizados E31, E32, pagos mixtos, crédito, descuento, precios cero, reconexión, carrera de procesadores y reversión.
-- Implementar servicio Windows de sincronización con lectura Firebird transaccional, cola/lease/reintentos, publicación y conciliación. **No incluido** en este paquete.
+- Validar el servicio Windows con corte inicial, emisión completa, reintentos desde payloads y SourceMap. El código existe; compilación y pruebas están pendientes.
 - Plan de rollback y ejecución gradual sobre clon. **Nunca ejecutar estos scripts directamente en producción en el estado actual.**

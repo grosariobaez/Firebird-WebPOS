@@ -3,13 +3,12 @@ namespace JomliaWebPosSync.Configuration;
 public sealed class SyncOptions
 {
     public bool Enabled { get; set; }
+    public DateTime? InvoiceStart { get; set; }
     public int PollIntervalSeconds { get; set; } = 3;
     public int BatchSize { get; set; } = 10;
-    public int SettleDelaySeconds { get; set; } = 3;
-    public int ClaimLeaseSeconds { get; set; } = 120;
     public int MaxInvoiceRows { get; set; } = 10000;
     public int MaxPayloadBytes { get; set; } = 16 * 1024 * 1024;
-    public string PayloadDirectory { get; set; } = @"%ProgramData%\PuntoAparte\JomliaWebPosSync\Outbox";
+    public string PayloadDirectory { get; set; } = @"C:\ProgramData\PuntoAparte\JomliaWebPosSync\Outbox";
     public RetrySettings RetrySettings { get; set; } = new();
 }
 
@@ -21,9 +20,9 @@ public sealed class RetrySettings
 
 public sealed class FirebirdOptions
 {
-    public string Host { get; set; } = "10.0.0.51";
+    public string Host { get; set; } = "";
     public int Port { get; set; } = 3050;
-    public string Database { get; set; } = @"C:\SISTEMAPROD\DATA\JOMLIA.GDB";
+    public string Database { get; set; } = "";
     public string Charset { get; set; } = "";
     public int ConnectionTimeoutSeconds { get; set; } = 15;
     public int CommandTimeoutSeconds { get; set; } = 15;
@@ -35,7 +34,7 @@ public sealed class FirebirdOptions
 public sealed class SqlServerOptions
 {
     public string Server { get; set; } = "";
-    public string Database { get; set; } = "webpos_rd";
+    public string Database { get; set; } = "";
     public bool Encrypt { get; set; } = true;
     public bool TrustServerCertificate { get; set; }
     public bool IntegratedSecurity { get; set; } = true;
@@ -53,5 +52,6 @@ public sealed class WebPosOptions
     public string PosCod { get; set; } = "";
     // A single destination per service. Never mix Firebird companies implicitly.
     public int? SourceCompanyId { get; set; }
+    public Dictionary<int, int> InitialInvoiceIdByCompany { get; set; } = new();
     public bool AllowMonetaryLineDiscount { get; set; }
 }

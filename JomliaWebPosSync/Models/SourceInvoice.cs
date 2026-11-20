@@ -1,10 +1,6 @@
 namespace JomliaWebPosSync.Models;
 
 public readonly record struct InvoiceKey(int IdCompania, int IdFactura);
-public sealed record PendingInvoice(InvoiceKey Key, DateTime EventAt, int Attempts);
-public sealed record InvoiceClaim(InvoiceKey Key, string Token, DateTime EventAt, int Attempt);
-public sealed record QueueCounts(long Pending, long Processing, long Synchronized, long Error);
-public sealed record SourceEvent(InvoiceKey Key, string Code, DateTime EventAt);
 
 public sealed record SourceHeader(
     int IdCompania, int IdFactura, int? IdCliente, DateTime? Fecha, string? Nombre,

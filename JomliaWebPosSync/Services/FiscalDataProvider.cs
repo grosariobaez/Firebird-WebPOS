@@ -5,15 +5,19 @@ namespace JomliaWebPosSync.Services;
 
 public interface IFiscalDataProvider
 {
-    CustomerMapping? ResolveCustomer(int company, int? customerId);
+    CustomerMapping? ResolveCustomer(int company, int? customerId, string? ncf);
     DateOnly? ResolveNcfExpiry(int company, string ncf, DateTime? documentDate);
 }
 
 public sealed class ConfiguredFiscalDataProvider(IOptions<FiscalMappingsOptions> options) : IFiscalDataProvider
 {
-    public CustomerMapping? ResolveCustomer(int company, int? customerId) =>
-        customerId.HasValue && options.Value.Customers.TryGetValue(InvoiceMapper.Identity(company, customerId.Value), out var customer)
-            ? customer : null;
+    public CustomerMapping? ResolveCustomer(int company, int? customerId, string? ncf)
+    {
+        if (!string.IsNullOrEmpty(ncf) && options.Value.Customers.TryGetValue(InvoiceMapper.Identity(company, ncf), out var byNcf))
+            return byNcf;
+        return customerId.HasValue && options.Value.Customers.TryGetValue(InvoiceMapper.Identity(company, customerId.Value), out var byId)
+            ? byId : null;
+    }
 
     public DateOnly? ResolveNcfExpiry(int company, string ncf, DateTime? documentDate)
     {

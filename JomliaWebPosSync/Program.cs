@@ -13,11 +13,14 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 {
     Args = args, ContentRootPath = AppContext.BaseDirectory
 });
-// Local file is optional, excluded from source control. Environment is applied last.
+var protectedSecrets = new ProtectedSecretStore();
+foreach (var secret in protectedSecrets.ToConfiguration())
+    builder.Configuration[secret.Key] = secret.Value;
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
 builder.Configuration.AddEnvironmentVariables(prefix: "JOMLIA_SYNC_");
 builder.Services.AddWindowsService(o => o.ServiceName = "JomliaWebPosSync");
 builder.Logging.AddJsonConsole(o => { o.IncludeScopes = true; o.TimestampFormat = "O"; o.UseUtcTimestamp = true; });
+builder.Logging.AddEventLog(o => o.SourceName = "JomliaWebPosSync");
 // Database providers may emit SQL/connection details: disable their internal logs.
 builder.Logging.AddFilter("FirebirdSql", LogLevel.None);
 builder.Logging.AddFilter("Microsoft.Data.SqlClient", LogLevel.None);

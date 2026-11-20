@@ -4,11 +4,20 @@ public enum ItbisInterpretation
 {
     Unconfirmed,
     MonetaryAmount,
-    PercentageRate
+    PercentageRate,
+    HeaderAllocated
 }
 
 public sealed class FiscalMappingsOptions
 {
+    public static decimal RequiredItbisRate(int tax) => tax switch
+    {
+        0 or 3 or 4 => 0m,
+        1 => 18m,
+        2 => 16m,
+        _ => throw new ArgumentOutOfRangeException(nameof(tax))
+    };
+
     public bool PricesExcludeItbisConfirmed { get; set; }
     public bool NoTipsConfirmed { get; set; }
     public bool PaymentAmountsAreAppliedAmountsConfirmed { get; set; }

@@ -1,47 +1,40 @@
-﻿# JOMLIA → WebPOS Windows Service
+﻿# IXU — JomliaWebPosSync
 
-Código fuente completo del Worker Service para **.NET 10 / Windows**, basado en el paquete V3-QA de `docs/`. La entrega permanece deshabilitada (`Sync:Enabled=false`) hasta completar la configuración y la fase posterior de validación.
+**IXU.** Inteligencia · Ejecución · Utilidad.
+Tecnología para operaciones del mundo real.
+INNOVAXD UX SRL — https://innovaxd.ca/es/
 
-**No se ejecutaron build, restore, test, publish, el servicio, scripts SQL, instalaciones, conexiones a servidores ni despliegues.**
+Servicio Windows para **.NET 10 / Windows** que lee facturas emitidas de JOMLIA en Firebird y las entrega a WebPOS/SQL Server mediante `dbo.usp_ImportarFacturaFirebird`.
 
-## Archivos principales
+## Estado
 
-- [Solución](JomliaWebPosSync.slnx) y [proyecto](JomliaWebPosSync/JomliaWebPosSync.csproj).
-- `Program.cs` y `Worker.cs`: Host, DI, SCM, validación de opciones, un procesador, polling y cancelación.
-- `Repositories/`: cola Firebird, snapshot y ejecución tipada del SP SQL Server.
-- `Services/`: lectura, mapeo, validación, almacén durable y coordinación.
-- `Serialization/`: JSON determinista y SHA-256.
-- `Resilience/`: reservas renovables y reintentos exponenciales con jitter.
-- `Security/` y `Diagnostics/`: conexiones sin secretos en código, ACL, escritura durable, logs estructurados y contadores.
-- [Configuración sin secretos](JomliaWebPosSync/appsettings.example.json) y [guía detallada](JomliaWebPosSync/CONFIGURATION.md).
+- `Sync:Enabled=false` por defecto: la sincronización no se activa al instalar.
+- No se ejecutaron conexiones a producción, activación DGII ni instalación aislada end-to-end en esta entrega.
+- El instalador se genera como `installer/output/JomliaWebPosSync-Setup.exe`.
 
-## Flujo implementado
+## Componentes
 
-`PA_FB_OUTBOX → claim condicional → snapshot consistente → validación fiscal/financiera → JSON → archivo durable → usp_ImportarFacturaFirebird → ACK condicional S`.
+- `JomliaWebPosSync/`: servicio Worker, lectura Firebird, validación fiscal, payload durable, ejecución del SP e idempotencia.
+- `JomliaWebPosSync.Configurator/`: configurador WinForms con prueba de conexiones, secretos protegidos y activación controlada.
+- `installer/`: script Inno Setup y build reproducible del instalador.
+- `docs/PRODUCTION_INSTALLATION.md`: instalación, configuración, activación, rollback y diagnóstico.
 
-No se modifican las tablas comerciales Firebird ni se insertan registros directamente en WebPOS. El procedimiento controla su transacción y el orden Payment → Detail → Header. S confirma la importación, no la autorización DGII.
+## Seguridad
 
-## Recuperación
+- Las contraseñas no se guardan en `appsettings.json`, scripts ni logs.
+- Se almacenan cifradas con DPAPI `LocalMachine` en `%ProgramData%\PuntoAparte\JomliaWebPosSync\secrets.json`, con ACL restringida a SYSTEM y Administradores.
+- SQL Server usa `Encrypt=true` y `TrustServerCertificate=false` por defecto. `TrustServerCertificate=true` solo puede habilitarse explícitamente en el configurador y muestra advertencia de seguridad.
+- El servicio se ejecuta como `LocalSystem` y no requiere sesión interactiva.
 
-Las reservas usan un token único en ULTIMO_ERROR durante R y vencimiento en PROXIMO_INTENTO, calculado por Firebird. Solo el propietario vigente puede renovarlas o confirmar S. Los triggers que restablecen P invalidan al propietario anterior.
+## Configuración y activación
 
-El archivo inmutable se escribe antes de SQL, con checksum, flush a disco, renombrado atómico y ACL. Se conserva después de S para detectar cambios posteriores. Los reintentos reutilizan exactamente el mismo JSON; conflictos y corrupción requieren revisión, sin regenerar contenido. Las reservas vencidas se recuperan y los fallos transitorios no agotan un límite de intentos.
+Completar servidor SQL, credenciales, charset Firebird, `SourceCompanyId`, licencia/sucursal/POS, `InvoiceStart`, **IDFACTURA mínimo a sincronizar (inclusive)** (`IDFACTURA >= valor`) y carpeta durable desde el configurador. No utilizar valores de QA como predeterminados de producción.
 
-Se implementa entrega **al menos una vez con efectos idempotentes**. Una instancia por almacén local NTFS; no se ofrece HA activo-activo con almacenes independientes.
+Las equivalencias fiscales permanecen vacías o deshabilitadas hasta confirmar los datos de JOMLIA. La [guía de configuración](JomliaWebPosSync/CONFIGURATION.md) define cada clave y sus reglas.
 
-## Configuración pendiente
+## Límites
 
-Completar servidor SQL, credenciales protegidas, charset Firebird, compañía origen, licencia/sucursal/POS y carpeta durable. Variables de entorno: prefijo `JOMLIA_SYNC_`, separador `__`; por ejemplo `JOMLIA_SYNC_Firebird__Password`. También se admite `appsettings.Local.json`, excluido del versionado y de la copia automática al publicar.
-
-Las equivalencias fiscales permanecen vacías o deshabilitadas: tipo/estados documentales, precios sin ITBIS, descuentos, impuestos, clasificación de artículos, unidades, identificación real del cliente, vencimiento eNCF y FPA_TIPO. La [guía de configuración](JomliaWebPosSync/CONFIGURATION.md) define cada clave, reglas de precisión, permisos y tratamiento de errores. No se inventa el esquema de CLIENTES ni datos fiscales.
-
-V1.1 añade: bloqueo incondicional de `FAC_STATUS='ANU'` con tres clasificaciones (`SOURCE_INVOICE_CANCELLED`, `CANCELLED_AFTER_PREPARATION`, `POST_SYNC_CANCELLATION`), estrategia explícita para DFC_ITBIS (`Unconfirmed` por defecto), reglas confirmables de consistencia de pago sin convertir F6/EFE/TRA en el JSON, y eventos de origen para conciliación. La migración `docs/11_firebird_outbox_safety_v4.sql` está preparada pero **no ejecutada**; debe aplicarse antes de habilitar el servicio en un entorno autorizado. El contrato JSON, los payloads existentes y la idempotencia del SP no cambian.
-
-## Atención antes de producción
-
-- El JSON de ejemplo contiene un eNCF de 12 caracteres; el servicio aplica los 13 exigidos por el SP.
-- El paquete presenta discrepancias de versión y longitudes entre Excel y SP; se aplican límites conservadores y se documentan en la guía.
-- El SP V3 sigue siendo QA. El servicio comprueba SourceMap y la ruta persistida, pero otros escritores y cambios concurrentes de mapas necesitan control operativo.
-- Confirmar motor/proveedor, esquema físico, charset, tipos monetarios y consumidores WebPOS sin lecturas sucias. FLOAT/DOUBLE monetarios se bloquean hasta confirmar una conversión decimal.
-- Preservar el almacén y sus respaldos. Cambios comerciales que no reencolen la factura no se detectan mediante esta cola.
-- La instalación futura deberá configurar inicio automático y recuperación SCM, identidad, EventLog y permisos. Compilación y validación con clones quedan expresamente pendientes.
+- Solo facturas nuevas posteriores al corte, emitidas y no anuladas.
+- No hay dashboard, API, base adicional, triggers en Firebird ni escritura directa en tablas WebPOS.
+- Se conservan las validaciones fiscales indispensables, incluidas las tasas canónicas de ITBIS: 0/3/4 = 0%, 1 = 18%, 2 = 16%.
+- El contrato JSON, la serialización determinista, los mapas y la idempotencia del SP no cambian.

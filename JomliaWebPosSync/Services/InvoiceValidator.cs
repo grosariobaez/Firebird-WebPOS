@@ -30,9 +30,9 @@ public sealed partial class InvoiceValidator(IOptions<FiscalMappingsOptions> fis
         Check(s.Payments.All(p => p.IdCompania == s.Key.IdCompania && p.IdFactura == s.Key.IdFactura), "SOURCE_IDENTITY", "FORMAS_PAGO");
         Check(s.Details.Select(d => d.Secuencia).Distinct().Count() == s.Details.Count, "DUPLICATE_SEQUENCE", "DET_FACTURA");
         Check(s.Payments.Select(p => p.Secuencia).Distinct().Count() == s.Payments.Count, "DUPLICATE_SEQUENCE", "FORMAS_PAGO");
-        Check(h.Total.HasValue, "MISSING_FIELD", "FAC_TOTAL");
+        var total = h.Total ?? throw new SyncException("MISSING_FIELD", "FAC_TOTAL");
         Check(s.Payments.All(p => p.Monto.HasValue), "MISSING_FIELD", "FPA_MONTO");
-        Check(s.Payments.Sum(p => p.Monto!.Value) == h.Total.Value, "PAYMENT_TOTAL_MISMATCH", "FPA_MONTO/FAC_TOTAL");
+        Check(s.Payments.Sum(p => p.Monto ?? 0m) == total, "PAYMENT_TOTAL_MISMATCH", "FPA_MONTO/FAC_TOTAL");
         PaymentConsistency.Validate(s, fiscal.Value);
         Check(h.Descuento is >= 0, "INVALID_AMOUNT", "FAC_DESCUENTO");
         if (h.Descuento != 0)
@@ -53,8 +53,6 @@ public sealed partial class InvoiceValidator(IOptions<FiscalMappingsOptions> fis
     public void ValidatePayload(InvoicePayload p)
     {
         var strategy = fiscal.Value.EffectiveLineItbisInterpretation;
-        if (strategy is not (ItbisInterpretation.MonetaryAmount or ItbisInterpretation.PercentageRate))
-            throw new SyncException("FISCAL_RULE_UNCONFIRMED", "DFC_ITBIS");
         var h = p.Header;
         Check(h.DocType == "F", "DOCUMENT_TYPE_DISABLED", "docType");
         Check(NcfPattern().IsMatch(h.Ncf), "INVALID_NCF", "ncf");
@@ -99,7 +97,7 @@ public sealed partial class InvoiceValidator(IOptions<FiscalMappingsOptions> fis
             Check(d.Tax != 4 || net == 0, "NONBILLABLE_AMOUNT_UNCONFIRMED", "tax");
             decimal rate = strategy == ItbisInterpretation.PercentageRate
                 ? FiscalItbis.PercentageForTaxCode(fiscal.Value, d.Tax) / 100m
-                : d.Tax switch { 1 => 0.18m, 2 => 0.16m, _ => 0m };
+                : FiscalMappingsOptions.RequiredItbisRate(d.Tax) / 100m;
             Check(d.Itbis == Round(net * rate), "LINE_ITBIS_MISMATCH", "DFC_ITBIS");
             baseTotal = checked(baseTotal + net); taxTotal = checked(taxTotal + d.Itbis);
         }

@@ -5,3 +5,7 @@
 **/*.payload
 **/*.tmp
 **/.instance.lock
+installer/.publish/
+installer/.publish-configurator/
+installer/output/
+installer/Output/

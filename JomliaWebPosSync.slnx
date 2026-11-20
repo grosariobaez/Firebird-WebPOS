@@ -1,3 +1,5 @@
 <Solution>
+  <Project Path="JomliaWebPosSync.Tests/JomliaWebPosSync.Tests.csproj" />
   <Project Path="JomliaWebPosSync/JomliaWebPosSync.csproj" />
+  <Project Path="JomliaWebPosSync.Configurator/JomliaWebPosSync.Configurator.csproj" />
 </Solution>

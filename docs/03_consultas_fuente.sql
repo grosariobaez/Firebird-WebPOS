@@ -1,6 +1,6 @@
 /* SOLO LECTURA. JOMLIA Firebird. Sustituir los IDs en QA.
-   El servicio debe consultar cabecera/detalle/pagos en una misma transaccion
-   read-only SNAPSHOT, posterior al COMMIT que genera el outbox.
+   El servicio consulta cabecera/detalle/pagos en una misma transaccion
+   read-only SNAPSHOT, sin escribir en Firebird.
    FAC_FECHAVENCE NO ES sin prueba documental el vencimiento fiscal eNCF.
 */
 SELECT IDCOMPANIA, IDFACTURA, IDCLIENTE, FAC_FECHA, FAC_NOMBRE,
