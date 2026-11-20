@@ -332,16 +332,16 @@ internal sealed class MainForm : Form
         var pending = IxuVerifiedDefaults.GetPendingFiscalItems(config);
         if (pending.Count == 0)
         {
-            pendingFiscalText = "Reglas fiscales verificadas precargadas. No hay reglas pendientes de validación.";
+            pendingFiscalText = "Reglas verificadas precargadas. Sin dependencias pendientes.";
             txtDetails.Text = pendingFiscalText;
             return;
         }
         var sb = new StringBuilder();
-        sb.AppendLine("Reglas fiscales verificadas precargadas (solo faltantes; no se sobrescriben valores existentes).");
-        sb.AppendLine("Pendientes de validación (no inventadas):");
+        sb.AppendLine("Reglas JOMLIA verificadas aplicadas en código (estados, ITBIS derivado seguro, cliente desde FACTURAS, F6->crédito 04, sin propinas).");
+        sb.AppendLine("Dependencias/bloqueos a considerar:");
         foreach (var item in pending) sb.AppendLine("  - " + item);
         sb.AppendLine();
-        sb.Append("Valores dependientes del cliente (conexiones, credenciales, licencia/sucursal/POS, compañía y corte) deben completarse por el usuario.");
+        sb.Append("Complete los parámetros operativos y de conexión; las claves legacy no necesarias se ignoran y se conservan al guardar.");
         pendingFiscalText = sb.ToString();
         txtDetails.Text = pendingFiscalText;
     }

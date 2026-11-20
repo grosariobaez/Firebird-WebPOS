@@ -1,28 +1,24 @@
-using JomliaWebPosSync.Configuration;
-using Microsoft.Extensions.Options;
+﻿using JomliaWebPosSync.Models;
+using JomliaWebPosSync.Resilience;
 
 namespace JomliaWebPosSync.Services;
 
 public interface IFiscalDataProvider
 {
-    CustomerMapping? ResolveCustomer(int company, int? customerId, string? ncf);
-    DateOnly? ResolveNcfExpiry(int company, string ncf, DateTime? documentDate);
+    DateOnly? ResolveNcfExpiry(SourceHeader header);
 }
 
-public sealed class ConfiguredFiscalDataProvider(IOptions<FiscalMappingsOptions> options) : IFiscalDataProvider
+public sealed class ConfiguredFiscalDataProvider : IFiscalDataProvider
 {
-    public CustomerMapping? ResolveCustomer(int company, int? customerId, string? ncf)
+    public DateOnly? ResolveNcfExpiry(SourceHeader header)
     {
-        if (!string.IsNullOrEmpty(ncf) && options.Value.Customers.TryGetValue(InvoiceMapper.Identity(company, ncf), out var byNcf))
-            return byNcf;
-        return customerId.HasValue && options.Value.Customers.TryGetValue(InvoiceMapper.Identity(company, customerId.Value), out var byId)
-            ? byId : null;
-    }
-
-    public DateOnly? ResolveNcfExpiry(int company, string ncf, DateTime? documentDate)
-    {
-        var m = options.Value;
-        if (m.NcfExpiryDates.TryGetValue(InvoiceMapper.Identity(company, ncf), out var configured)) return configured;
-        return m.UseFacFechaVenceAsNcfExpiryConfirmed && documentDate.HasValue ? DateOnly.FromDateTime(documentDate.Value) : null;
+        string ncf = header.Ncf ?? string.Empty;
+        bool isE32 = ncf.StartsWith("E32", StringComparison.OrdinalIgnoreCase);
+        if (header.FechaVence is null)
+        {
+            if (isE32) return null;
+            throw new SyncException("MISSING_NCF_EXPIRY", "FAC_FECHAVENCE");
+        }
+        return DateOnly.FromDateTime(header.FechaVence.Value);
     }
 }

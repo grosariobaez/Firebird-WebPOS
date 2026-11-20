@@ -1,6 +1,4 @@
-using System.Globalization;
-using JomliaWebPosSync.Configuration;
-using JomliaWebPosSync.Resilience;
+﻿using JomliaWebPosSync.Resilience;
 
 namespace JomliaWebPosSync.Services;
 
@@ -8,43 +6,24 @@ internal static class FiscalItbis
 {
     public static decimal Round2(decimal value) => decimal.Round(value, 2, MidpointRounding.AwayFromZero);
 
-    public static decimal PercentageForTaxCode(FiscalMappingsOptions options, int tax)
+    public static int ResolveTax(string? sourceTaxCode)
     {
-        if (tax is < 0 or > 4) throw new SyncException("UNKNOWN_FISCAL_CODE", "tax");
-        string key = tax.ToString(CultureInfo.InvariantCulture);
-        if (!options.ItbisRatesByTaxCode.TryGetValue(key, out decimal rate))
-            throw new SyncException("MISSING_MAPPING", "ITBIS.rate");
-        if (rate != FiscalMappingsOptions.RequiredItbisRate(tax))
-            throw new SyncException("ITBIS_RATE_CONFIG_MISMATCH", "ITBIS.rate");
-        return rate;
+        // Regla verificada IXU 1.0.4: DFC_ITBIS (clasificación ITBIS) NULL/vacío/espacios -> tax 1 (18%).
+        if (string.IsNullOrWhiteSpace(sourceTaxCode))
+            return 1;
+        string code = sourceTaxCode.Trim();
+        if (int.TryParse(code, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int tax) && tax is >= 0 and <= 4)
+            return tax;
+        if (decimal.TryParse(code, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out decimal rate))
+        {
+            if (rate == 18m) return 1;
+            if (rate == 16m) return 2;
+            if (rate == 0m) return 0;
+        }
+        // No convertir códigos desconocidos no vacíos silenciosamente a 18%.
+        throw new SyncException("UNKNOWN_FISCAL_CODE", "ITBIS.tax");
     }
 
-    public static decimal MonetaryAmount(FiscalMappingsOptions options, int tax, decimal quantity, decimal price, decimal discount, decimal? sourceItbis)
-    {
-        var strategy = options.EffectiveLineItbisInterpretation;
-        if (strategy == ItbisInterpretation.MonetaryAmount)
-        {
-            decimal value = sourceItbis ?? throw new SyncException("MISSING_FIELD", "DFC_ITBIS");
-            RequireLineRoundingConfirmed(options);
-            return value;
-        }
-        if (strategy is not (ItbisInterpretation.PercentageRate or ItbisInterpretation.HeaderAllocated))
-            throw new SyncException("FISCAL_RULE_UNCONFIRMED", "DFC_ITBIS");
-        decimal configured = PercentageForTaxCode(options, tax);
-        if (strategy == ItbisInterpretation.PercentageRate)
-        {
-            decimal percentage = sourceItbis ?? throw new SyncException("MISSING_FIELD", "DFC_ITBIS");
-            if (percentage != configured)
-                throw new SyncException("LINE_ITBIS_RATE_MISMATCH", "DFC_ITBIS");
-        }
-        decimal baseAmount = Round2(checked(quantity * price) - discount);
-        RequireLineRoundingConfirmed(options);
-        return Round2(baseAmount * configured / 100m);
-    }
-
-    private static void RequireLineRoundingConfirmed(FiscalMappingsOptions options)
-    {
-        if (!options.ItbisRoundedPerLineConfirmed)
-            throw new SyncException("FISCAL_RULE_UNCONFIRMED", "ITBIS.redondeo_por_linea");
-    }
+    public static decimal LineAmount(int tax, decimal quantity, decimal price, decimal discount) =>
+        Round2(Round2(checked(quantity * price) - discount) * JomliaWebPosSync.Configuration.FiscalMappingsOptions.RequiredItbisRate(tax) / 100m);
 }

@@ -34,9 +34,7 @@ public sealed class ConfigurationValidator(
             && initialId >= 0, "WebPos:InitialInvoiceIdByCompany[<SourceCompanyId>] required");
         Require(Text(w.CompanyLicCod, 10) && Text(w.BranchCod, 4) && Text(w.PosCod, 3), "WebPos license/branch/POS required (max 10/4/3 per V6)");
         Require(!w.AllowMonetaryLineDiscount || m.MonetaryLineDiscountConfirmed, "Discount permission requires fiscal confirmation");
-        Require(!m.AllowedHeaderStatuses.Contains("ANU", StringComparer.Ordinal), "FiscalMappings:AllowedHeaderStatuses cannot include ANU");
-        Require(!(m.LineItbisInterpretation == ItbisInterpretation.PercentageRate && m.LineItbisIsMonetaryAmountConfirmed),
-            "FiscalMappings: contradictory DFC_ITBIS interpretation");
+        Require(m.AllowedNcfPrefixes.Length > 0 && m.AllowedNcfPrefixes.All(p => p is "E31" or "E32" or "E44" or "E45" or "E46"), "FiscalMappings:AllowedNcfPrefixes invalid");
         foreach (var rate in m.ItbisRatesByTaxCode)
         {
             if (!int.TryParse(rate.Key, NumberStyles.None, CultureInfo.InvariantCulture, out int tax) || tax is < 0 or > 4)
@@ -47,16 +45,11 @@ public sealed class ConfigurationValidator(
             decimal canonical = FiscalMappingsOptions.RequiredItbisRate(tax);
             Require(rate.Value == canonical, $"FiscalMappings:ItbisRatesByTaxCode.{rate.Key} must be {canonical:0.##}%");
         }
-        string[] components = ["Efectivo", "TarjetaMonto", "Transferencia", "ChequeMonto", "Credito"];
-        foreach (var rule in m.PaymentConsistencyRules.Values)
-        {
-            Require(rule is not null && rule.ZeroComponents is not null && components.Contains(rule.ExpectedComponent, StringComparer.Ordinal)
-                && rule.ZeroComponents.All(c => components.Contains(c, StringComparer.Ordinal))
-                && !rule.ZeroComponents.Contains(rule.ExpectedComponent, StringComparer.Ordinal),
-                "FiscalMappings:PaymentConsistencyRules invalid");
-        }
+        Require(m.Currency is "DOP" or "USD" or "EUR", "FiscalMappings:Currency invalid");
+        Require(m.CurrencyRate > 0 && (m.Currency != "DOP" || m.CurrencyRate == 1), "FiscalMappings:CurrencyRate invalid");
+        Require(m.OperMode is "01" or "02" or "03" or "04" or "05" or "06", "FiscalMappings:OperMode invalid");
+        Require(m.PaymentType is null or 1 or 2 or 3, "FiscalMappings:PaymentType invalid");
         Require(!string.IsNullOrWhiteSpace(s.PayloadDirectory), "Sync:PayloadDirectory required");
-        // Unknown fiscal equivalences are checked per document; they do not prevent queue diagnostics.
         return errors.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(errors);
     }
 }

@@ -16,16 +16,16 @@ public sealed partial class InvoiceValidator(IOptions<FiscalMappingsOptions> fis
     public void ValidateSource(InvoiceSnapshot s)
     {
         var h = s.Header ?? throw new SyncException("MISSING_HEADER", "FACTURAS");
-        if (string.Equals(h.Status, "ANU", StringComparison.Ordinal))
+        if (string.Equals(h.Status, "ANU", StringComparison.OrdinalIgnoreCase))
             throw new SyncException("SOURCE_INVOICE_CANCELLED", "FAC_STATUS");
+        Check(string.Equals(h.Status, "PEN", StringComparison.OrdinalIgnoreCase), "UNCONFIRMED_STATUS", "FAC_STATUS");
         Check(s.Key.IdCompania >= 0 && s.Key.IdFactura >= 0 && s.Key.IdCompania == webpos.Value.SourceCompanyId, "SOURCE_IDENTITY", "IDCOMPANIA");
         Check(h.IdCompania == s.Key.IdCompania && h.IdFactura == s.Key.IdFactura, "SOURCE_IDENTITY", "FACTURAS");
         Check(s.Details.Count > 0, "MISSING_DETAILS", "DET_FACTURA");
         Check(s.Payments.Count > 0, "MISSING_PAYMENTS", "FORMAS_PAGO");
-        // A partial emission is recoverable, regardless of the number of attempts.
-        if (s.Payments.Any(p => p.Status != "EMI")) throw new SyncException("PARTIAL_EMISSION", "FPA_STATUS", true);
-        Check(fiscal.Value.AllowedHeaderStatuses.Contains(h.Status, StringComparer.Ordinal), "UNCONFIRMED_STATUS", "FAC_STATUS");
-        Check(s.Details.All(d => fiscal.Value.AllowedDetailStatuses.Contains(d.Status, StringComparer.Ordinal)), "UNCONFIRMED_STATUS", "DFC_STATUS");
+        if (s.Payments.Any(p => !string.Equals(p.Status, "EMI", StringComparison.OrdinalIgnoreCase)))
+            throw new SyncException("PARTIAL_EMISSION", "FPA_STATUS", true);
+        Check(s.Details.All(d => string.IsNullOrWhiteSpace(d.Status)), "UNCONFIRMED_STATUS", "DFC_STATUS");
         Check(s.Details.All(d => d.IdCompania == s.Key.IdCompania && d.IdFactura == s.Key.IdFactura), "SOURCE_IDENTITY", "DET_FACTURA");
         Check(s.Payments.All(p => p.IdCompania == s.Key.IdCompania && p.IdFactura == s.Key.IdFactura), "SOURCE_IDENTITY", "FORMAS_PAGO");
         Check(s.Details.Select(d => d.Secuencia).Distinct().Count() == s.Details.Count, "DUPLICATE_SEQUENCE", "DET_FACTURA");
@@ -33,7 +33,7 @@ public sealed partial class InvoiceValidator(IOptions<FiscalMappingsOptions> fis
         var total = h.Total ?? throw new SyncException("MISSING_FIELD", "FAC_TOTAL");
         Check(s.Payments.All(p => p.Monto.HasValue), "MISSING_FIELD", "FPA_MONTO");
         Check(s.Payments.Sum(p => p.Monto ?? 0m) == total, "PAYMENT_TOTAL_MISMATCH", "FPA_MONTO/FAC_TOTAL");
-        PaymentConsistency.Validate(s, fiscal.Value);
+        PaymentConsistency.Validate(s);
         Check(h.Descuento is >= 0, "INVALID_AMOUNT", "FAC_DESCUENTO");
         if (h.Descuento != 0)
         {
@@ -46,13 +46,12 @@ public sealed partial class InvoiceValidator(IOptions<FiscalMappingsOptions> fis
     public void ValidateReplay(InvoiceSnapshot s)
     {
         var h = s.Header ?? throw new SyncException("MISSING_HEADER", "FACTURAS");
-        if (string.Equals(h.Status, "ANU", StringComparison.Ordinal))
+        if (string.Equals(h.Status, "ANU", StringComparison.OrdinalIgnoreCase))
             throw new SyncException("CANCELLED_AFTER_PREPARATION", "FAC_STATUS");
     }
 
     public void ValidatePayload(InvoicePayload p)
     {
-        var strategy = fiscal.Value.EffectiveLineItbisInterpretation;
         var h = p.Header;
         Check(h.DocType == "F", "DOCUMENT_TYPE_DISABLED", "docType");
         Check(NcfPattern().IsMatch(h.Ncf), "INVALID_NCF", "ncf");
@@ -61,7 +60,6 @@ public sealed partial class InvoiceValidator(IOptions<FiscalMappingsOptions> fis
         Check(h.NcfVencimiento.HasValue || h.Ncf.StartsWith("E32", StringComparison.Ordinal), "MISSING_FIELD", "ncfVencimiento");
         Check(h.CustomerType is "03" or "04" or "05" or "06" or "07", "UNKNOWN_FISCAL_CODE", "customerType");
         Length(h.Nombre, 150, "nombre"); Length(h.Direccion, 100, "direccion");
-        // V6 is more restrictive (11) than the QA SP (20): do not silently expand the contract.
         Length(h.Ruc, 11, "ruc");
         if (h.CustomerType != "07")
             Check(!string.IsNullOrWhiteSpace(h.Nombre) && !string.IsNullOrWhiteSpace(h.Ruc) && !string.IsNullOrWhiteSpace(h.Direccion), "MISSING_CUSTOMER_DATA", "cliente");
@@ -95,10 +93,7 @@ public sealed partial class InvoiceValidator(IOptions<FiscalMappingsOptions> fis
             Check(net >= 0, "INVALID_LINE_BASE", "cantidad/precio/descuento");
             Check((d.Precio != 0 && d.Descuento != Round(gross)) || d.Tax == 4, "ZERO_LINE_REQUIRES_NONBILLABLE", "tax");
             Check(d.Tax != 4 || net == 0, "NONBILLABLE_AMOUNT_UNCONFIRMED", "tax");
-            decimal rate = strategy == ItbisInterpretation.PercentageRate
-                ? FiscalItbis.PercentageForTaxCode(fiscal.Value, d.Tax) / 100m
-                : FiscalMappingsOptions.RequiredItbisRate(d.Tax) / 100m;
-            Check(d.Itbis == Round(net * rate), "LINE_ITBIS_MISMATCH", "DFC_ITBIS");
+            Check(d.Itbis == Round(net * FiscalMappingsOptions.RequiredItbisRate(d.Tax) / 100m), "LINE_ITBIS_MISMATCH", "DFC_ITBIS");
             baseTotal = checked(baseTotal + net); taxTotal = checked(taxTotal + d.Itbis);
         }
         foreach (var pay in p.Payments)
