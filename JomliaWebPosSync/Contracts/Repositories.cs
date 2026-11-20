@@ -4,7 +4,7 @@ namespace JomliaWebPosSync.Contracts;
 
 public interface IFirebirdRepository
 {
-    Task<IReadOnlyList<InvoiceKey>> GetCandidateInvoicesAsync(CancellationToken ct);
+    Task<IReadOnlyList<InvoiceKey>> GetCandidateInvoicesAsync(int fromIdInclusive, int? toIdExclusive, CancellationToken ct);
     Task<InvoiceSnapshot> ReadSnapshotAsync(InvoiceKey key, CancellationToken ct);
 }
 
@@ -17,7 +17,10 @@ public interface ISqlServerRepository
 public interface IPayloadStore
 {
     void Initialize();
-    IEnumerable<InvoiceKey> EnumerateKeys();
+    string DirectoryPath { get; }
+    IEnumerable<InvoiceKey> EnumeratePendingKeys();
+    IEnumerable<InvoiceKey> EnumerateCompletedKeys();
     Task<StoredPayload?> LoadAsync(InvoiceKey key, CancellationToken ct);
     Task<StoredPayload> SaveIfAbsentAsync(StoredPayload payload, CancellationToken ct);
+    Task MarkCompletedAsync(InvoiceKey key, CancellationToken ct);
 }

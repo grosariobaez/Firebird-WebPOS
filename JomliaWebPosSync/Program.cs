@@ -40,6 +40,7 @@ builder.Services.AddSingleton<PayloadDirectorySecurity>();
 builder.Services.AddSingleton<IFirebirdRepository, FirebirdRepository>();
 builder.Services.AddSingleton<ISqlServerRepository, SqlServerRepository>();
 builder.Services.AddSingleton<IPayloadStore, PayloadStore>();
+builder.Services.AddSingleton<ISyncProgressStore, SyncProgressStore>();
 builder.Services.AddSingleton<InvoiceReader>();
 builder.Services.AddSingleton<IFiscalDataProvider, ConfiguredFiscalDataProvider>();
 builder.Services.AddSingleton<InvoiceMapper>();

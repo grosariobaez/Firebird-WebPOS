@@ -444,18 +444,52 @@ public sealed class MinimalSyncTests
     {
         public Queue<InvoiceSnapshot> Snapshots { get; } = new();
         public int Reads { get; private set; }
-        public Task<IReadOnlyList<InvoiceKey>> GetCandidateInvoicesAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<InvoiceKey>>([]);
+        public List<(int from, int? to)> CandidateCalls { get; } = [];
+        public List<InvoiceKey> Candidates { get; set; } = [];
+        public Task<IReadOnlyList<InvoiceKey>> GetCandidateInvoicesAsync(int fromIdInclusive, int? toIdExclusive, CancellationToken ct)
+        {
+            CandidateCalls.Add((fromIdInclusive, toIdExclusive));
+            var list = Candidates.Where(k => k.IdFactura >= fromIdInclusive && (!toIdExclusive.HasValue || k.IdFactura < toIdExclusive.Value)).OrderBy(k => k.IdFactura).ToList();
+            return Task.FromResult<IReadOnlyList<InvoiceKey>>(list);
+        }
         public Task<InvoiceSnapshot> ReadSnapshotAsync(InvoiceKey key, CancellationToken ct) { Reads++; return Task.FromResult(Snapshots.Dequeue()); }
     }
 
     private sealed class FakeStore : IPayloadStore
     {
-        private readonly Dictionary<InvoiceKey, StoredPayload> items = [];
+        private readonly Dictionary<InvoiceKey, StoredPayload> pending = [];
+        private readonly Dictionary<InvoiceKey, StoredPayload> completed = [];
         public List<StoredPayload> Saves { get; } = [];
+        public string DirectoryPath => "C:\\TEST\\JomliaWebPosSync";
         public void Initialize() { }
-        public IEnumerable<InvoiceKey> EnumerateKeys() => items.Keys.ToArray();
-        public Task<StoredPayload?> LoadAsync(InvoiceKey key, CancellationToken ct) => Task.FromResult(items.TryGetValue(key, out var p) ? p : null);
-        public Task<StoredPayload> SaveIfAbsentAsync(StoredPayload payload, CancellationToken ct) { Saves.Add(payload); items[payload.Key] = payload; return Task.FromResult(payload); }
-        public void Seed(StoredPayload payload) => items[payload.Key] = payload;
+        public IEnumerable<InvoiceKey> EnumeratePendingKeys() => pending.Keys.ToArray();
+        public IEnumerable<InvoiceKey> EnumerateCompletedKeys() => completed.Keys.ToArray();
+        public Task<StoredPayload?> LoadAsync(InvoiceKey key, CancellationToken ct)
+        {
+            if (pending.TryGetValue(key, out var p)) return Task.FromResult<StoredPayload?>(p);
+            if (completed.TryGetValue(key, out var c)) return Task.FromResult<StoredPayload?>(c);
+            return Task.FromResult<StoredPayload?>(null);
+        }
+        public Task<StoredPayload> SaveIfAbsentAsync(StoredPayload payload, CancellationToken ct) { Saves.Add(payload); if (!completed.ContainsKey(payload.Key)) pending[payload.Key] = payload; return Task.FromResult(pending.TryGetValue(payload.Key, out var p) ? p : completed[payload.Key]); }
+        public Task MarkCompletedAsync(InvoiceKey key, CancellationToken ct)
+        {
+            if (pending.Remove(key, out var p)) completed[key] = p;
+            else if (!completed.ContainsKey(key) && pending.TryGetValue(key, out var pp)) completed[key] = pp;
+            return Task.CompletedTask;
+        }
+        public void Seed(StoredPayload payload) => pending[payload.Key] = payload;
+        public void SeedCompleted(StoredPayload payload) => completed[payload.Key] = payload;
+        public bool IsCompleted(InvoiceKey key) => completed.ContainsKey(key);
+        public bool IsPending(InvoiceKey key) => pending.ContainsKey(key);
+    }
+
+    private sealed class FakeProgressStore : ISyncProgressStore
+    {
+        public SyncProgress? Saved { get; private set; }
+        public List<SyncProgress> Saves { get; } = [];
+        public SyncProgress? ToLoad { get; set; }
+        public void Initialize(string directory) { }
+        public Task<SyncProgress?> LoadAsync(ImportRoute route, int companyId, int initialId, CancellationToken ct) => Task.FromResult(ToLoad);
+        public Task SaveAsync(SyncProgress progress, CancellationToken ct) { Saved = progress; Saves.Add(progress); return Task.CompletedTask; }
     }
 }

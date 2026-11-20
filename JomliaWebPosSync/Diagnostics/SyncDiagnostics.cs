@@ -1,6 +1,7 @@
 using System.Diagnostics.Metrics;
 using JomliaWebPosSync.Configuration;
 using JomliaWebPosSync.Models;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace JomliaWebPosSync.Diagnostics;
@@ -33,6 +34,15 @@ public sealed class SyncDiagnostics : IDisposable
         string? safeNcf = ncf is { Length: 13 } && ncf[0] == 'E' && ncf.AsSpan(1).IndexOfAnyExceptInRange('0', '9') < 0 ? ncf : null;
         logger.Log(level, "{Action} SourceSystem={SourceSystem} IDCOMPANIA={IDCOMPANIA} IDFACTURA={IDFACTURA} NCF={NCF} State={State} DurationMs={DurationMs} ErrorType={ErrorType} Field={Field}",
             action, source, key.IdCompania, key.IdFactura, safeNcf, state, elapsed.TotalMilliseconds, errorType, field);
+    }
+
+    public void CycleSummary(int forwardScanned, int reconcileScanned, int imported, int completedSkipped,
+        int deferred, int failed, int pendingPayloads, int nextForwardId, int reconcileCursorId, TimeSpan elapsed)
+    {
+        if (forwardScanned == 0 && reconcileScanned == 0 && imported == 0 && completedSkipped == 0
+            && deferred == 0 && failed == 0 && pendingPayloads == 0) return;
+        logger.LogInformation("CycleSummary SourceSystem={SourceSystem} ForwardScanned={ForwardScanned} ReconcileScanned={ReconcileScanned} Imported={Imported} CompletedSkipped={CompletedSkipped} Deferred={Deferred} Failed={Failed} PendingPayloads={PendingPayloads} NextForwardId={NextForwardId} ReconcileCursorId={ReconcileCursorId} DurationMs={DurationMs}",
+            source, forwardScanned, reconcileScanned, imported, completedSkipped, deferred, failed, pendingPayloads, nextForwardId, reconcileCursorId, elapsed.TotalMilliseconds);
     }
     public void Dispose() => meter.Dispose();
 }

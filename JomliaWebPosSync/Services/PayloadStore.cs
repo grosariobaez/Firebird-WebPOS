@@ -24,20 +24,31 @@ public sealed class PayloadStore(IOptions<SyncOptions> sync, IOptions<WebPosOpti
         string path = Environment.ExpandEnvironmentVariables(sync.Value.PayloadDirectory);
         security.Prepare(path);
         directory = Path.GetFullPath(path);
+        string completedDir = Path.Combine(directory, "completed");
+        if (!System.IO.Directory.Exists(completedDir)) System.IO.Directory.CreateDirectory(completedDir);
+        try { security.ProtectFile(completedDir); } catch { }
         // Exclusive handle held for process lifetime. OS releases it after a crash.
         string lockPath = Path.Combine(directory, ".instance.lock");
         if (File.Exists(lockPath)) security.ProtectFile(lockPath);
         instanceLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     }
 
-    private string FileName(InvoiceKey key) => $"JOMLIA_{key.IdCompania.ToString(CultureInfo.InvariantCulture)}_{key.IdFactura.ToString(CultureInfo.InvariantCulture)}.payload";
-    private string FilePath(InvoiceKey key) => Path.Combine(directory ?? throw new InvalidOperationException("Payload store not initialized"), FileName(key));
+    public string DirectoryPath => directory ?? throw new InvalidOperationException("Payload store not initialized");
 
-    public IEnumerable<InvoiceKey> EnumerateKeys()
+    private string FileName(InvoiceKey key) => $"JOMLIA_{key.IdCompania.ToString(CultureInfo.InvariantCulture)}_{key.IdFactura.ToString(CultureInfo.InvariantCulture)}.payload";
+    private string PendingPath(InvoiceKey key) => Path.Combine(DirectoryPath, FileName(key));
+    private string CompletedDir => Path.Combine(DirectoryPath, "completed");
+    private string CompletedPath(InvoiceKey key) => Path.Combine(CompletedDir, FileName(key));
+
+    public IEnumerable<InvoiceKey> EnumeratePendingKeys() => EnumerateIn(DirectoryPath);
+    public IEnumerable<InvoiceKey> EnumerateCompletedKeys() => EnumerateIn(CompletedDir);
+
+    private IEnumerable<InvoiceKey> EnumerateIn(string path)
     {
-        foreach (string path in Directory.EnumerateFiles(directory!, "JOMLIA_*.payload", SearchOption.TopDirectoryOnly))
+        if (!System.IO.Directory.Exists(path)) yield break;
+        foreach (string file in System.IO.Directory.EnumerateFiles(path, "JOMLIA_*.payload", SearchOption.TopDirectoryOnly))
         {
-            var parts = Path.GetFileNameWithoutExtension(path).Split('_');
+            var parts = Path.GetFileNameWithoutExtension(file).Split('_');
             if (parts.Length != 3 || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out int company)
                 || !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out int invoice))
                 throw new SyncException("INVALID_PAYLOAD_FILENAME", "PayloadDirectory");
@@ -48,15 +59,22 @@ public sealed class PayloadStore(IOptions<SyncOptions> sync, IOptions<WebPosOpti
 
     public async Task<StoredPayload?> LoadAsync(InvoiceKey key, CancellationToken ct)
     {
-        string path = FilePath(key);
-        // Do not use File.Exists to decide absence: it also hides access and IO failures.
+        string pending = PendingPath(key);
+        if (File.Exists(pending)) return await ReadPayloadAsync(pending, key, ct);
+        string completed = CompletedPath(key);
+        if (File.Exists(completed)) return await ReadPayloadAsync(completed, key, ct);
+        return null;
+    }
+
+    private async Task<StoredPayload> ReadPayloadAsync(string path, InvoiceKey key, CancellationToken ct)
+    {
         FileStream file;
         try
         {
             security.ProtectFile(path);
             file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
         }
-        catch (FileNotFoundException) { return null; }
+        catch (FileNotFoundException) { throw; }
         await using (file)
         {
             if (file.Length <= 0 || file.Length > sync.Value.MaxPayloadBytes)
@@ -90,34 +108,57 @@ public sealed class PayloadStore(IOptions<SyncOptions> sync, IOptions<WebPosOpti
 
     public async Task<StoredPayload> SaveIfAbsentAsync(StoredPayload payload, CancellationToken ct)
     {
-        var existing = await LoadAsync(payload.Key, ct);
-        if (existing is not null) return RequireSame(existing, payload);
+        string pending = PendingPath(payload.Key);
+        string completed = CompletedPath(payload.Key);
+        if (File.Exists(completed))
+        {
+            var existingCompleted = await ReadPayloadAsync(completed, payload.Key, ct);
+            return RequireSame(existingCompleted, payload);
+        }
+        if (File.Exists(pending))
+        {
+            var existing = await ReadPayloadAsync(pending, payload.Key, ct);
+            return RequireSame(existing, payload);
+        }
         string content = JsonSerializer.Serialize(payload, InvoiceJsonSerializer.Options);
         string envelope = JsonSerializer.Serialize(new PayloadEnvelope(content, InvoiceJsonSerializer.HashUtf8(content)), InvoiceJsonSerializer.Options);
         byte[] bytes = Utf8.GetBytes(envelope);
         if (bytes.Length > sync.Value.MaxPayloadBytes) throw new SyncException("PAYLOAD_SIZE_LIMIT", "PayloadFile");
-        string destination = FilePath(payload.Key);
-        string temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        string temporary = pending + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
-                // New file inherits the already restricted directory ACL.
                 await file.WriteAsync(bytes, ct);
                 await file.FlushAsync(ct);
                 file.Flush(flushToDisk: true);
             }
             ct.ThrowIfCancellationRequested();
-            // Atomic same-volume rename with no overwrite. No SQL call can precede this operation.
-            DurableFileRename.MoveNew(temporary, destination);
-            return await LoadAsync(payload.Key, ct) ?? throw new SyncException("PAYLOAD_DISAPPEARED", "PayloadFile");
+            DurableFileRename.MoveNew(temporary, pending);
+            return await ReadPayloadAsync(pending, payload.Key, ct);
         }
         finally
         {
-            // A stale .tmp never represented a sent document; failed cleanup is harmless.
             try { File.Delete(temporary); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+    }
+
+    public Task MarkCompletedAsync(InvoiceKey key, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        string pending = PendingPath(key);
+        string completed = CompletedPath(key);
+        if (File.Exists(completed)) return Task.CompletedTask;
+        if (!File.Exists(pending)) return Task.CompletedTask;
+        if (!System.IO.Directory.Exists(CompletedDir)) System.IO.Directory.CreateDirectory(CompletedDir);
+        try { DurableFileRename.MoveNew(pending, completed); }
+        catch (IOException)
+        {
+            if (File.Exists(completed) && !File.Exists(pending)) return Task.CompletedTask;
+            throw;
+        }
+        return Task.CompletedTask;
     }
 
     private static StoredPayload RequireSame(StoredPayload existing, StoredPayload candidate)

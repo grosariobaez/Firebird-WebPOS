@@ -15,4 +15,11 @@ internal static class DurableFileRename
         if (!MoveFileEx(temporary, destination, 0x00000008))
             throw new IOException("Durable payload rename failed", new Win32Exception(Marshal.GetLastWin32Error()));
     }
+
+    public static void MoveReplace(string temporary, string destination)
+    {
+        // MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        if (!MoveFileEx(temporary, destination, 0x00000001 | 0x00000008))
+            throw new IOException("Durable file replace failed", new Win32Exception(Marshal.GetLastWin32Error()));
+    }
 }

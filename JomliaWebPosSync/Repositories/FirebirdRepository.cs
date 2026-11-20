@@ -37,16 +37,19 @@ public sealed class FirebirdRepository(ConnectionFactory connections, IOptions<S
 
     private InvoiceCutover Cutover() => InvoiceCutover.From(webpos.Value, sync.Value);
 
-    public async Task<IReadOnlyList<InvoiceKey>> GetCandidateInvoicesAsync(CancellationToken ct)
+    public async Task<IReadOnlyList<InvoiceKey>> GetCandidateInvoicesAsync(int fromIdInclusive, int? toIdExclusive, CancellationToken ct)
     {
         var cutover = Cutover();
+        int from = Math.Max(fromIdInclusive, cutover.InitialId);
+        if (toIdExclusive.HasValue && toIdExclusive.Value <= from) return [];
         await using var c = connections.CreateFirebird();
         await c.OpenAsync(ct);
         await using var t = await c.BeginTransactionAsync(ReadTransaction(), ct);
         await using var cmd = Command(c, t, """
             SELECT FIRST (@batch) F.IDCOMPANIA,F.IDFACTURA
             FROM FACTURAS F
-            WHERE F.IDCOMPANIA=@company AND F.IDFACTURA>=@initial AND F.FAC_FECHA>=@start
+            WHERE F.IDCOMPANIA=@company AND F.IDFACTURA>=@from AND F.FAC_FECHA>=@start
+              AND (@to IS NULL OR F.IDFACTURA < @to)
               AND (F.FAC_STATUS IS NULL OR F.FAC_STATUS<>'ANU')
               AND EXISTS (SELECT 1 FROM DET_FACTURA D
                            WHERE D.IDCOMPANIA=F.IDCOMPANIA AND D.IDFACTURA=F.IDFACTURA)
@@ -60,7 +63,8 @@ public sealed class FirebirdRepository(ConnectionFactory connections, IOptions<S
             """);
         Add(cmd, "@batch", FbDbType.Integer, sync.Value.BatchSize);
         Add(cmd, "@company", FbDbType.Integer, cutover.Company);
-        Add(cmd, "@initial", FbDbType.Integer, cutover.InitialId);
+        Add(cmd, "@from", FbDbType.Integer, from);
+        Add(cmd, "@to", FbDbType.Integer, toIdExclusive);
         Add(cmd, "@start", FbDbType.TimeStamp, cutover.Start);
         var result = new List<InvoiceKey>();
         await using (var r = await cmd.ExecuteReaderAsync(ct))
